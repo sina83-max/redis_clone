@@ -95,7 +95,7 @@ func (r *Resp) Read() (Value, error) {
 	case BULK:
 		return r.readBulk()
 	default:
-		fmt.Println("Uknown type: %v", string(_type))
+		fmt.Printf("Uknown type: %v", string(_type))
 		// Returns empty Value struct + nil
 		return Value{}, nil
 	}
