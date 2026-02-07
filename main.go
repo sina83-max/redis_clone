@@ -24,6 +24,9 @@ func main() {
 	defer aof.Close()
 
 	aof.Read(func(value Value) {
+		if len(value.array) == 0 {
+			return
+		}
 		command := strings.ToUpper(value.array[0].bulk)
 		args := value.array[1:]
 
