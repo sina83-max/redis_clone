@@ -21,6 +21,7 @@ func NewDB() *DB {
 
 func (db *DB) Set(key, value string) {
 	db.mu.Lock()
+	// "Remember" to unlock at the very end
 	defer db.mu.Unlock()
 
 	db.kv[key] = value

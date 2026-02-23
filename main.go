@@ -30,19 +30,9 @@ func main() {
 
 	// AOF Recovery
 	aof.Read(func(value Value) {
-		if len(value.array) == 0 {
-			return
-		}
-		command := strings.ToUpper(value.array[0].bulk)
-		args := value.array[1:]
-
-		handler, ok := Handlers[command]
-		if !ok {
-			fmt.Println("Invalid command: ", command)
-			return
-		}
-
-		handler(args, db)
+		// We pass nil for Aof because we don't want to
+		// write to the AOF file while we are reading FROM it
+		executeCommand(value, db, nil)
 	})
 
 	// Main accept loop
@@ -63,37 +53,53 @@ func main() {
 // handleClient manages the lifecycle of a single TCP connection
 func handleClient(conn net.Conn, db *DB, aof *Aof) {
 	defer conn.Close()
-
+	resp := NewResp(conn)
+	writer := NewWriter(conn)
 	for {
-		resp := NewResp(conn)
+		// Read
 		value, err := resp.Read()
 		if err != nil {
-			return
+			return // Client disconnected
 		}
 
-		if value.typ != "array" || len(value.array) == 0 {
-			fmt.Println("Invalid request, expected non-empty array")
-			continue
-		}
+		// Execute
+		result := executeCommand(value, db, aof)
 
-		command := strings.ToUpper(value.array[0].bulk)
-		args := value.array[1:]
-
-		writer := NewWriter(conn)
-
-		handler, ok := Handlers[command]
-		if !ok {
-			writer.Write(Value{typ: "error", str: "ERR unknown command '" + command + "'"})
-			continue
-		}
-
-		// Persist write commands to AOF
-		if command == "SET" || command == "HSET" {
-			aof.Write(value)
-		}
-
-		// Execute handler and send response
-		result := handler(args, db)
+		// Write
 		writer.Write(result)
 	}
+}
+
+// executeCommand acts like the "controller" of the app
+func executeCommand(value Value, db *DB, aof *Aof) Value {
+	// 1. Basic Validation
+	if value.typ != "array" || len(value.array) == 0 {
+		fmt.Println("Invalid request, expected non-empty array")
+		return Value{
+			typ: "err",
+			str: "ERR unknown command format",
+		}
+	}
+
+	// 3. Extract command and Args
+	command := strings.ToUpper(value.array[0].bulk)
+	args := value.array[1:]
+
+	// 4. Lookup handler
+	handler, ok := Handlers[command]
+	if !ok {
+		return Value{
+			typ: "error",
+			str: "ERR unknown command '" + command + "'",
+		}
+	}
+
+	// 4. Persistance (AOF) - Only for write commands
+	// Note: This list must be dynamic, not hardcoded
+	if (command == "SET" || command == "HSET") && aof != nil {
+		aof.Write(value)
+	}
+
+	// 5. Execute handler and send response
+	return handler(args, db)
 }
