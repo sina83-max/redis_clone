@@ -9,13 +9,18 @@ import (
 func main() {
 	fmt.Println("listening on port :6379")
 
+	// Initialize storage engine
+	db := NewDB()
+
 	// Create a new server
 	l, err := net.Listen("tcp", ":6379")
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
+	defer l.Close()
 
+	// Setup AOF (Persistance)
 	aof, err := NewAof("database.aof")
 	if err != nil {
 		fmt.Println(err)
@@ -23,6 +28,7 @@ func main() {
 	}
 	defer aof.Close()
 
+	// AOF Recovery
 	aof.Read(func(value Value) {
 		if len(value.array) == 0 {
 			return
@@ -36,33 +42,37 @@ func main() {
 			return
 		}
 
-		handler(args)
+		handler(args, db)
 	})
 
-	// Listen for connection
-	conn, err := l.Accept()
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
+	// Main accept loop
+	for {
+		conn, err := l.Accept()
+		if err != nil {
+			fmt.Println("Error accepting connection:", err)
+			continue
+			// Don't kill the server on a failed connection
+		}
 
+		// Handle connection in a seperate Goroutine
+		// To handle Cuncurrency
+		go handleClient(conn, db, aof)
+	}
+}
+
+// handleClient manages the lifecycle of a single TCP connection
+func handleClient(conn net.Conn, db *DB, aof *Aof) {
 	defer conn.Close()
 
 	for {
 		resp := NewResp(conn)
 		value, err := resp.Read()
 		if err != nil {
-			fmt.Println(err)
 			return
 		}
 
-		if value.typ != "array" {
-			fmt.Println("Invalid request, expected array")
-			continue
-		}
-
-		if len(value.array) == 0 {
-			fmt.Println("Invalid request, expected array length > 0")
+		if value.typ != "array" || len(value.array) == 0 {
+			fmt.Println("Invalid request, expected non-empty array")
 			continue
 		}
 
@@ -73,20 +83,17 @@ func main() {
 
 		handler, ok := Handlers[command]
 		if !ok {
-			fmt.Println("Invalid command: ", command)
-			writer.Write(Value{
-				typ: "string",
-				str: "",
-			})
+			writer.Write(Value{typ: "error", str: "ERR unknown command '" + command + "'"})
 			continue
 		}
 
+		// Persist write commands to AOF
 		if command == "SET" || command == "HSET" {
 			aof.Write(value)
 		}
 
-		result := handler(args)
+		// Execute handler and send response
+		result := handler(args, db)
 		writer.Write(result)
-
 	}
 }
